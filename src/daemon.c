@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -21,6 +22,16 @@ static const char *app_id = "454q3qk5jh0rzgps78fnxrwc5u1i8t";
 extern char *immutable_string_copy(const char *src);
 extern void **pointer_array_map(void **src, size_t src_count, void *(*getter)(void *));
 extern void pointer_array_free(int count, void **src, void(*deinit)(void *));
+
+/** State **/
+
+static bool terminated = false;
+
+void sig_handler(int signo) {
+  if (signo == SIGINT || signo == SIGTERM) {
+    terminated = true;
+  }
+}
 
 /** Helpers **/
 
@@ -174,17 +185,39 @@ int main(int argc, char **argv) {
   }
 
   if (pid > 0) {
-    fprintf(stdout, "Forked to child process %lld", pid);
+    exit(EXIT_SUCCESS);
+  }
+
+  sid = setsid();
+  if (sid < 0) {
+    fprintf(stderr, "Failed to get a SID for a child process\n");
+    exit(EXIT_FAILURE);
+  }
+
+  // Setup signal catchers.
+  if (signal(SIGINT, sig_handler) == SIG_ERR) {
+    fprintf(stderr, "Failed to setup SIGINT catcher\n");
+    exit(EXIT_FAILURE);
+  }
+  if (signal(SIGTERM, sig_handler) == SIG_ERR) {
+    fprintf(stderr, "Failed to setup SIGTERM catcher\n");
+    exit(EXIT_FAILURE);
+  }
+
+  // Fork off for the second time.
+  pid = fork();
+
+  if (pid < 0) {
+    exit(EXIT_FAILURE);
+  }
+
+  if (pid > 0) {
+    fprintf(stdout, "Forked to child process %lld\n", pid);
     exit(EXIT_SUCCESS);
   }
 
   umask(0);
-
-  sid = setsid();
-  if (sid < 0) {
-    fprintf(stderr, "Failed to get a SID for a child process");
-    exit(EXIT_FAILURE);
-  }
+  chdir("/");
 
   // Close standard outputs.
   close(STDIN_FILENO);
@@ -196,7 +229,7 @@ int main(int argc, char **argv) {
   twitch_v5_stream_list *streams = NULL;
   streams = get_live_follows(argv[1], app_id);
 
-  while (1) {
+  while (!terminated) {
     sleep(120);
 
     // Update the list.
@@ -208,7 +241,7 @@ int main(int argc, char **argv) {
       show_streamer_online(new->items[index]);
     }
 
-    // Cleanup memory. Since we weren't copying stream structs, we just need to shallow free the diff list.
+    // Free the memory. Since we weren't copying stream structs, we just need to shallow free the diff list.
     free(new->items);
     free(new);
 
@@ -216,5 +249,13 @@ int main(int argc, char **argv) {
     twitch_v5_stream_list_free(streams);
     streams = updated;
   }
+
+  // Cleanup.
+  notify_uninit();
+  if (streams != NULL) {
+    twitch_v5_stream_list_free(streams);
+  }
+
+  return 0;
 }
 

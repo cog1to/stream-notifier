@@ -30,7 +30,21 @@ From the build dir:
 
 # Usage
 
-`stream-notifier <your-twitch-username>`
+`# stream-notifier <your-twitch-username>`
+
+OR
+
+```
+# stream-notifier <your-twitch-username> -now
+ESL_SC2
+   Game: StarCraft II
+   Status: RERUN: INnoVation [T] vs. RagnaroK [Z] - Group C Round 4 - IEM Katowice 2019
+   URL: https://www.twitch.tv/esl_sc2
+GOGcom
+   Game: Sally Face
+   Status: DanVanDam plays the twisted Sally Face [Blind]
+   URL: https://www.twitch.tv/gogcom
+```
 
 # Configuration
 

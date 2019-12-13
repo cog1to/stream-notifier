@@ -168,12 +168,49 @@ twitch_v5_stream_list *new_streams(twitch_v5_stream_list *old, twitch_v5_stream_
   return list;
 }
 
+void print_current_streams(char *username) {
+  twitch_v5_stream_list* streams = get_live_follows(username, app_id);
+
+  if (streams == NULL) {
+    fprintf(stderr, "Failed to get a list of active follows\n");
+    exit(EXIT_FAILURE);
+  }
+
+  for (int index = 0; index < streams->count; index++) {
+    twitch_v5_stream *stream = streams->items[index];
+    printf("%s\n  Game: %s\n  Status: %s\n  URL: %s\n",
+      stream->channel->display_name,
+      stream->game,
+      stream->channel->status,
+      stream->channel->url
+    );
+  }
+
+  twitch_v5_stream_list_free(streams);
+}
+
 /** Main **/
+
+void print_usage() {
+  printf("Usage:\n  stream-notifier <username> [options]\n\n");
+  printf("Options:\n");
+  printf("  %-20s\t%s\n", "-now", "Instead of starting the daemon, just prints out currently online streams and exits.");
+}
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    fprintf(stderr, "Usage: stream-notifier <username>\n");
+    print_usage();
     exit(EXIT_FAILURE);
+  }
+
+  if (argc > 2) {
+    if (strcmp(argv[2], "-now") == 0) {
+      print_current_streams(argv[1]);
+      return 0;
+    } else {
+      print_usage();
+      exit(EXIT_FAILURE);
+    }
   }
 
   pid_t pid, sid;
@@ -224,7 +261,7 @@ int main(int argc, char **argv) {
   close(STDOUT_FILENO);
   close(STDERR_FILENO);
 
-  // Initialize dameon.
+  // Initialize daemon.
   notify_init("stream-notifier");
   twitch_v5_stream_list *streams = NULL;
   streams = get_live_follows(argv[1], app_id);

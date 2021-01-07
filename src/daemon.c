@@ -16,6 +16,8 @@
 
 // App ID (registered in Twitch dev portal).
 static const char *app_id = "454q3qk5jh0rzgps78fnxrwc5u1i8t";
+// Client secret for getting client credentials.
+static const char *client_secret = "cdefldwy95veeixq41kwtlrv2audw7";
 
 /** Internal functions from ctwitch **/
 

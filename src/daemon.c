@@ -19,15 +19,15 @@ static const char *app_id = "454q3qk5jh0rzgps78fnxrwc5u1i8t";
 // Client secret for getting client credentials.
 static const char *client_secret = "cdefldwy95veeixq41kwtlrv2audw7";
 
-/** Internal functions from ctwitch **/
+/** Helper functions **/
 
-extern char *immutable_string_copy(const char *src);
-extern void **pointer_array_map(void **src, size_t src_count, void *(*getter)(void *));
-extern void pointer_array_free(int count, void **src, void(*deinit)(void *));
+extern char *immutable_string_copy(const char *);
 
 /** State **/
 
 static bool terminated = false;
+
+static char *auth_token = NULL;
 
 void sig_handler(int signo) {
   if (signo == SIGINT || signo == SIGTERM) {
@@ -60,24 +60,26 @@ twitch_helix_stream_list *get_live_follows(
   const char *client_id,
   const char *client_secret
 ) {
-  // Get token.
-  twitch_helix_auth_token *token = twitch_helix_get_app_access_token(client_id, client_secret, 0, NULL);
-  if (token == NULL) {
-    fprintf(stderr, "Error: failed to get auth token\n");
-    return NULL;
+  if (auth_token == NULL) {
+    // Get token.
+    twitch_helix_auth_token *token = twitch_helix_get_app_access_token(client_id, client_secret, 0, NULL);
+    if (token == NULL) {
+      fprintf(stderr, "Error: failed to get auth token\n");
+      return NULL;
+    }
+    auth_token = immutable_string_copy(token->token);
+    twitch_helix_auth_token_free(token);
   }
 
   // Find user by login name to get their user ID.
-  twitch_helix_user *user = twitch_helix_get_user(client_id, token->token, username);
+  twitch_helix_user *user = twitch_helix_get_user(client_id, auth_token, username);
   if (user == NULL) {
-    twitch_helix_auth_token_free(token);
     return NULL;
   }
 
-  twitch_helix_follow_list *follows = twitch_helix_get_all_follows(client_id, token->token, user->id, 0);
+  twitch_helix_follow_list *follows = twitch_helix_get_all_follows(client_id, auth_token, user->id, 0);
   if (follows == NULL) {
     twitch_helix_user_free(user);
-    twitch_helix_auth_token_free(token);
     return NULL;
   }
 
@@ -87,7 +89,7 @@ twitch_helix_stream_list *get_live_follows(
   }
   twitch_helix_stream_list *streams = twitch_helix_get_all_streams(
     client_id,
-    token->token,
+    auth_token,
     0,
     NULL,
     follows->count,
@@ -97,7 +99,6 @@ twitch_helix_stream_list *get_live_follows(
   );
 
   // Cleanup.
-  twitch_helix_auth_token_free(token);
   twitch_helix_user_free(user);
   twitch_helix_follow_list_free(follows);
 
@@ -199,71 +200,80 @@ void print_usage() {
   printf("Usage:\n  stream-notifier <username> [options]\n\n");
   printf("Options:\n");
   printf("  %-20s\t%s\n", "-now", "Instead of starting the daemon, just prints out currently online streams and exits.");
+  printf("  %-20s\t%s\n", "-debug", "Instead of forking to background, just run in the main loop.");
 }
 
 int main(int argc, char **argv) {
+  bool should_fork = true;
+
   if (argc < 2) {
     print_usage();
     exit(EXIT_FAILURE);
   }
 
   if (argc > 2) {
-    if (strcmp(argv[2], "-now") == 0) {
-      print_current_streams(argv[1]);
-      return 0;
-    } else {
-      print_usage();
-      exit(EXIT_FAILURE);
+    for (int idx = 2; idx < argc; idx++) {
+      if (strcmp(argv[idx], "-now") == 0) {
+        print_current_streams(argv[1]);
+        return 0;
+      } else if (strcmp(argv[idx], "-debug") == 0) {
+        should_fork = false;
+      } else {
+        print_usage();
+        exit(EXIT_FAILURE);
+      }
     }
   }
 
-  pid_t pid, sid;
-  pid = fork();
-
-  if (pid < 0) {
-    fprintf(stderr, "Failed to fork the process\n");
-    exit(EXIT_FAILURE);
+  if (should_fork) {
+    pid_t pid, sid;
+    pid = fork();
+  
+    if (pid < 0) {
+      fprintf(stderr, "Failed to fork the process\n");
+      exit(EXIT_FAILURE);
+    }
+  
+    if (pid > 0) {
+      exit(EXIT_SUCCESS);
+    }
+  
+    sid = setsid();
+    if (sid < 0) {
+      fprintf(stderr, "Failed to get a SID for a child process\n");
+      exit(EXIT_FAILURE);
+    }
+  
+    // Setup signal catchers.
+    if (signal(SIGINT, sig_handler) == SIG_ERR) {
+      fprintf(stderr, "Failed to setup SIGINT catcher\n");
+      exit(EXIT_FAILURE);
+    }
+    if (signal(SIGTERM, sig_handler) == SIG_ERR) {
+      fprintf(stderr, "Failed to setup SIGTERM catcher\n");
+      exit(EXIT_FAILURE);
+    }
+  
+    // Fork off for the second time.
+    pid = fork();
+  
+    if (pid < 0) {
+      exit(EXIT_FAILURE);
+    }
+  
+    if (pid > 0) {
+      fprintf(stdout, "Forked to child process %lld\n", pid);
+      exit(EXIT_SUCCESS);
+    }
+  
+    umask(0);
+    chdir("/");
+  
+    // Close standard outputs.
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
   }
-
-  if (pid > 0) {
-    exit(EXIT_SUCCESS);
-  }
-
-  sid = setsid();
-  if (sid < 0) {
-    fprintf(stderr, "Failed to get a SID for a child process\n");
-    exit(EXIT_FAILURE);
-  }
-
-  // Setup signal catchers.
-  if (signal(SIGINT, sig_handler) == SIG_ERR) {
-    fprintf(stderr, "Failed to setup SIGINT catcher\n");
-    exit(EXIT_FAILURE);
-  }
-  if (signal(SIGTERM, sig_handler) == SIG_ERR) {
-    fprintf(stderr, "Failed to setup SIGTERM catcher\n");
-    exit(EXIT_FAILURE);
-  }
-
-  // Fork off for the second time.
-  pid = fork();
-
-  if (pid < 0) {
-    exit(EXIT_FAILURE);
-  }
-
-  if (pid > 0) {
-    fprintf(stdout, "Forked to child process %lld\n", pid);
-    exit(EXIT_SUCCESS);
-  }
-
-  umask(0);
-  chdir("/");
-
-  // Close standard outputs.
-  close(STDIN_FILENO);
-  close(STDOUT_FILENO);
-  close(STDERR_FILENO);
 
   // Initialize daemon.
   notify_init("stream-notifier");
@@ -277,17 +287,22 @@ int main(int argc, char **argv) {
     twitch_helix_stream_list *updated = get_live_follows(argv[1], app_id, client_secret);
 
     // Show notifications for any new streams.
-    twitch_helix_stream_list *new = new_streams(streams, updated);
-    for (int index = 0; index < new->count; index++) {
-      show_streamer_online(new->items[index]);
+    if (updated != NULL) {
+      twitch_helix_stream_list *new = new_streams(streams, updated);
+      for (int index = 0; index < new->count; index++) {
+        show_streamer_online(new->items[index]);
+      }
+
+      // Free the memory. Since we weren't copying stream structs, we just need to shallow free the diff list.
+      free(new->items);
+      free(new);
     }
 
-    // Free the memory. Since we weren't copying stream structs, we just need to shallow free the diff list.
-    free(new->items);
-    free(new);
-
     // Save the updated list as current.
-    twitch_helix_stream_list_free(streams);
+    if (streams != NULL) {
+      twitch_helix_stream_list_free(streams);
+    }
+
     streams = updated;
   }
 

@@ -10,7 +10,7 @@
 #include <string.h>
 #include <libnotify/notify.h>
 #include <libgen.h>
-#include <ctwitch/v5.h>
+#include <ctwitch/helix.h>
 
 /** Config **/
 
@@ -35,22 +35,12 @@ void sig_handler(int signo) {
   }
 }
 
-/** Helpers **/
-
-void *channel_id_from_follow(void *src) {
-  twitch_v5_follow *follow = (twitch_v5_follow *)src;
-  char buffer[64];
-
-  sprintf(buffer, "%lld", follow->channel->id);
-  return immutable_string_copy(buffer);
-}
-
 /** Adds new item to the list.
  *
  * @param dest List to expand.
  * @param item Item to add to the list.
  */
-void twitch_v5_stream_list_append(twitch_v5_stream_list *dest, twitch_v5_stream *item) {
+void twitch_helix_stream_list_append(twitch_helix_stream_list *dest, twitch_helix_stream *item) {
   if (dest->count == 0) {
     dest->items = malloc(sizeof(void *));
   } else {
@@ -65,39 +55,51 @@ void twitch_v5_stream_list_append(twitch_v5_stream_list *dest, twitch_v5_stream 
  *
  * @param username Name of the user for which to get follows.
  */
-twitch_v5_stream_list *get_live_follows(const char *username, const char *client_id) {
+twitch_helix_stream_list *get_live_follows(
+  const char *username,
+  const char *client_id,
+  const char *client_secret
+) {
+  // Get token.
+  twitch_helix_auth_token *token = twitch_helix_get_app_access_token(client_id, client_secret, 0, NULL);
+  if (token == NULL) {
+    fprintf(stderr, "Error: failed to get auth token\n");
+    return NULL;
+  }
+
   // Find user by login name to get their user ID.
-  twitch_v5_user *user = twitch_v5_get_user_by_username(client_id, username);
+  twitch_helix_user *user = twitch_helix_get_user(client_id, token->token, username);
   if (user == NULL) {
+    twitch_helix_auth_token_free(token);
     return NULL;
   }
 
-  // Convert ID to string.
-  char* user_id = malloc(64 * sizeof(char));
-  sprintf(user_id, "%lld", user->id);
-
-  // Get all user's follows.
-  twitch_v5_follow_list *follows = twitch_v5_get_all_user_follows(client_id, user_id, NULL, NULL);
+  twitch_helix_follow_list *follows = twitch_helix_get_all_follows(client_id, token->token, user->id, 0);
   if (follows == NULL) {
-    twitch_v5_user_free(user);
+    twitch_helix_user_free(user);
+    twitch_helix_auth_token_free(token);
     return NULL;
   }
 
-  // Get all streams from user's follows.
-  char **channel_ids = (char **)pointer_array_map((void **)follows->items, follows->count, &channel_id_from_follow);
-  int streams_count = 0;
-  twitch_v5_stream_list *streams = twitch_v5_get_all_streams(
+  long long *user_ids = malloc(sizeof(long long) * follows->count);
+  for (int idx = 0; idx < follows->count; idx++) {
+    user_ids[idx] = follows->items[idx]->to_id;
+  }
+  twitch_helix_stream_list *streams = twitch_helix_get_all_streams(
     client_id,
+    token->token,
+    0,
+    NULL,
     follows->count,
-    (const char **)channel_ids,
-    NULL,
-    NULL,
+    user_ids,
+    0,
     NULL
   );
 
   // Cleanup.
-  twitch_v5_user_free(user);
-  twitch_v5_follow_list_free(follows);
+  twitch_helix_auth_token_free(token);
+  twitch_helix_user_free(user);
+  twitch_helix_follow_list_free(follows);
 
   return streams;
 }
@@ -120,16 +122,16 @@ void show_update(char *title, char *message) {
  *
  * @param stream Stream info to show.
  */
-void show_streamer_online(twitch_v5_stream *stream) {
+void show_streamer_online(twitch_helix_stream *stream) {
   char title[200];
   char message[500];
 
-  sprintf(title, "%s is online", stream->channel->display_name);
+  sprintf(title, "%s is online", stream->user_name);
   sprintf(message, "<b>%s</b> (%s) is online playing <b>%s</b> with status:\n\n<b>%s</b>",
-    stream->channel->display_name,
-    stream->channel->name,
-    stream->game != NULL ? stream->game : "unknown game",
-    stream->channel->status);
+    stream->user_name,
+    stream->user_name,
+    stream->game_name != NULL ? stream->game_name : "unknown game",
+    stream->title);
 
   show_update(title, message);
 }
@@ -142,7 +144,7 @@ void show_streamer_online(twitch_v5_stream *stream) {
  *
  * @return List containing only 'new' stream items.
  */
-twitch_v5_stream_list *new_streams(twitch_v5_stream_list *old, twitch_v5_stream_list *new) {
+twitch_helix_stream_list *new_streams(twitch_helix_stream_list *old, twitch_helix_stream_list *new) {
   if (old == NULL) {
     return new;
   }
@@ -152,7 +154,7 @@ twitch_v5_stream_list *new_streams(twitch_v5_stream_list *old, twitch_v5_stream_
   }
 
   // Iterate over new list and add each item not present in the old list to the diff list.
-  twitch_v5_stream_list *list = twitch_v5_stream_list_alloc();
+  twitch_helix_stream_list *list = twitch_helix_stream_list_alloc();
   bool found = false;
   for (int new_ind = 0; new_ind < new->count; new_ind++) {
     for (int old_ind = 0; old_ind < old->count; old_ind++) {
@@ -162,7 +164,7 @@ twitch_v5_stream_list *new_streams(twitch_v5_stream_list *old, twitch_v5_stream_
       }
     }
     if (!found) {
-      twitch_v5_stream_list_append(list, new->items[new_ind]);
+      twitch_helix_stream_list_append(list, new->items[new_ind]);
     }
     found = false;
   }
@@ -171,7 +173,7 @@ twitch_v5_stream_list *new_streams(twitch_v5_stream_list *old, twitch_v5_stream_
 }
 
 void print_current_streams(char *username) {
-  twitch_v5_stream_list* streams = get_live_follows(username, app_id);
+  twitch_helix_stream_list* streams = get_live_follows(username, app_id, client_secret);
 
   if (streams == NULL) {
     fprintf(stderr, "Failed to get a list of active follows\n");
@@ -179,16 +181,16 @@ void print_current_streams(char *username) {
   }
 
   for (int index = 0; index < streams->count; index++) {
-    twitch_v5_stream *stream = streams->items[index];
-    printf("%s\n  Game: %s\n  Status: %s\n  URL: %s\n",
-      stream->channel->display_name,
-      stream->game,
-      stream->channel->status,
-      stream->channel->url
+    twitch_helix_stream *stream = streams->items[index];
+    printf("%s\n  Game: %s\n  Status: %s\n  URL: https://twitch.tv/%s\n",
+      stream->user_name,
+      stream->game_name,
+      stream->title,
+      stream->user_name
     );
   }
 
-  twitch_v5_stream_list_free(streams);
+  twitch_helix_stream_list_free(streams);
 }
 
 /** Main **/
@@ -265,17 +267,17 @@ int main(int argc, char **argv) {
 
   // Initialize daemon.
   notify_init("stream-notifier");
-  twitch_v5_stream_list *streams = NULL;
-  streams = get_live_follows(argv[1], app_id);
+  twitch_helix_stream_list *streams = NULL;
+  streams = get_live_follows(argv[1], app_id, client_secret);
 
   while (!terminated) {
     sleep(120);
 
     // Update the list.
-    twitch_v5_stream_list *updated = get_live_follows(argv[1], app_id);
+    twitch_helix_stream_list *updated = get_live_follows(argv[1], app_id, client_secret);
 
     // Show notifications for any new streams.
-    twitch_v5_stream_list *new = new_streams(streams, updated);
+    twitch_helix_stream_list *new = new_streams(streams, updated);
     for (int index = 0; index < new->count; index++) {
       show_streamer_online(new->items[index]);
     }
@@ -285,14 +287,14 @@ int main(int argc, char **argv) {
     free(new);
 
     // Save the updated list as current.
-    twitch_v5_stream_list_free(streams);
+    twitch_helix_stream_list_free(streams);
     streams = updated;
   }
 
   // Cleanup.
   notify_uninit();
   if (streams != NULL) {
-    twitch_v5_stream_list_free(streams);
+    twitch_helix_stream_list_free(streams);
   }
 
   return 0;

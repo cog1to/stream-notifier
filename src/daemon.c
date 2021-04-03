@@ -18,10 +18,14 @@
 static const char *app_id = "454q3qk5jh0rzgps78fnxrwc5u1i8t";
 // Client secret for getting client credentials.
 static const char *client_secret = "cdefldwy95veeixq41kwtlrv2audw7";
-
-/** Helper functions **/
-
-extern char *immutable_string_copy(const char *);
+// Action template.
+static const char *action_template = "xdg-open 'https://www.twitch.tv/%s'";
+// Action title.
+static const char *action_title = "Open";
+// Notification expiration timeout.
+static const gint expiration_time_ms = 300000;
+// Polling interval.
+static const gint polling_interval_ms = 120000;
 
 /** State **/
 
@@ -29,13 +33,31 @@ static bool terminated = false;
 
 static char *auth_token = NULL;
 
+
+GMainLoop *loop = NULL;
+
+bool fetching = false;
+
+/** Helper functions **/
+
+// Copies given string to a new memory storage and returns a pointer to it.
+extern char *immutable_string_copy(const char *);
+
+// Notification action handler.
+void handle_notification_action(NotifyNotification *notification, char *action, gpointer user_data);
+
+/* Signal handler. */
+
 void sig_handler(int signo) {
   if (signo == SIGINT || signo == SIGTERM) {
     terminated = true;
   }
 }
 
-/** Adds new item to the list.
+/* Helpers */
+
+/** 
+ * Adds new item to the list.
  *
  * @param dest List to expand.
  * @param item Item to add to the list.
@@ -110,12 +132,34 @@ twitch_helix_stream_list *get_live_follows(
  *
  * @param title Notification title.
  * @param message Notification message.
- *
+ * @param user_name Stream's user name.
  */
-void show_update(char *title, char *message) {
+void show_update(char *title, char *message, char *user_name) {
   NotifyNotification *notif;
   notif = notify_notification_new(title, message, NULL);
-  notify_notification_show(notif, NULL);
+
+  // Add an action.
+  char *user_data = calloc(strlen(user_name) + 1, sizeof(char));
+  strcpy(user_data, user_name);
+  notify_notification_add_action(
+    notif, 
+    "STREAM_NOTIF_ACTION", 
+    action_title, 
+    NOTIFY_ACTION_CALLBACK(handle_notification_action), 
+    user_data, 
+    free
+  );
+
+  // Set timeout.
+  notify_notification_set_timeout(notif, expiration_time_ms);
+
+  // Show notification.
+  GError *error = NULL;
+  notify_notification_show(notif, &error);
+  if (error != NULL) {
+    fprintf(stderr, "Failed to show notification: %s\n", error->message);
+    g_clear_error(&error);
+  }
 }
 
 /**
@@ -134,7 +178,7 @@ void show_streamer_online(twitch_helix_stream *stream) {
     stream->game_name != NULL ? stream->game_name : "unknown game",
     stream->title);
 
-  show_update(title, message);
+  show_update(title, message, stream->user_name);
 }
 
 /**
@@ -147,11 +191,11 @@ void show_streamer_online(twitch_helix_stream *stream) {
  */
 twitch_helix_stream_list *new_streams(twitch_helix_stream_list *old, twitch_helix_stream_list *new) {
   if (old == NULL) {
-    return new;
+    return twitch_helix_stream_list_alloc();
   }
 
   if (new == NULL) {
-    return NULL;
+    return twitch_helix_stream_list_alloc();
   }
 
   // Iterate over new list and add each item not present in the old list to the diff list.
@@ -201,6 +245,54 @@ void print_usage() {
   printf("Options:\n");
   printf("  %-20s\t%s\n", "-now", "Instead of starting the daemon, just prints out currently online streams and exits.");
   printf("  %-20s\t%s\n", "-debug", "Instead of forking to background, just run in the main loop.");
+}
+
+gboolean update_list(gpointer user_data) {
+  static twitch_helix_stream_list *current = NULL;
+  twitch_helix_stream_list *updated = NULL;
+
+  if (fetching) {
+    return true;
+  } else {
+    fetching = true;
+  }
+
+  char *username = (char *)user_data;
+
+  // Update the list.
+  updated = get_live_follows(username, app_id, client_secret);
+
+  // Show notifications for any new streams.
+  if (updated != NULL) {
+    if (updated->count > 0) {
+      show_streamer_online(updated->items[0]);
+    }
+
+    twitch_helix_stream_list *new_list = new_streams(current, updated);
+    for (int index = 0; index < new_list->count; index++) {
+      show_streamer_online(new_list->items[index]);
+    }
+
+    // Free the memory. Since we weren't copying stream structs, we just need to shallow free the diff list.
+    free(new_list->items);
+    free(new_list);
+  }
+
+  // Save the updated list as current.
+  if (current != NULL) {
+    twitch_helix_stream_list_free(current);
+  }
+
+  current = updated;
+
+  // Unblock subsequent calls.
+  fetching = false;
+
+  if (terminated) {
+    g_main_loop_quit(loop);
+  }
+
+  return !terminated;
 }
 
 int main(int argc, char **argv) {
@@ -280,33 +372,13 @@ int main(int argc, char **argv) {
   twitch_helix_stream_list *streams = NULL;
   streams = get_live_follows(argv[1], app_id, client_secret);
 
-  while (!terminated) {
-    sleep(120);
-
-    // Update the list.
-    twitch_helix_stream_list *updated = get_live_follows(argv[1], app_id, client_secret);
-
-    // Show notifications for any new streams.
-    if (updated != NULL) {
-      twitch_helix_stream_list *new = new_streams(streams, updated);
-      for (int index = 0; index < new->count; index++) {
-        show_streamer_online(new->items[index]);
-      }
-
-      // Free the memory. Since we weren't copying stream structs, we just need to shallow free the diff list.
-      free(new->items);
-      free(new);
-    }
-
-    // Save the updated list as current.
-    if (streams != NULL) {
-      twitch_helix_stream_list_free(streams);
-    }
-
-    streams = updated;
-  }
+  // Start the loop.
+  loop = g_main_loop_new(NULL, false);
+  g_timeout_add(polling_interval_ms, update_list, argv[1]);
+  g_main_loop_run(loop);
 
   // Cleanup.
+  g_main_loop_unref(loop);
   notify_uninit();
   if (streams != NULL) {
     twitch_helix_stream_list_free(streams);
@@ -315,3 +387,10 @@ int main(int argc, char **argv) {
   return 0;
 }
 
+/* Private */
+
+void handle_notification_action(NotifyNotification *notification, char *action, gpointer user_data) {
+  char command[256] = { 0 };
+  sprintf(command, action_template, (char *)user_data);
+  system(command);
+}

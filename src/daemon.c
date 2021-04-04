@@ -12,6 +12,8 @@
 #include <libgen.h>
 #include <ctwitch/helix.h>
 
+#include "strings.h"
+
 /** Config **/
 
 // App ID (registered in Twitch dev portal).
@@ -23,19 +25,19 @@ static const char *action_template = "xdg-open 'https://www.twitch.tv/%s'";
 // Action title.
 static const char *action_title = "Open";
 // Notification expiration timeout.
-static const gint expiration_time_ms = 300000;
+static const gint expiration_time_ms = 15000;
 // Polling interval.
 static const gint polling_interval_ms = 120000;
 
 /** State **/
 
+// Termination flag. Is set from the signal handler.
 static bool terminated = false;
-
+// API auth token.
 static char *auth_token = NULL;
-
-
+// Main loop for Glib.
 GMainLoop *loop = NULL;
-
+// Very lazy safeguard against launching multiple updates concurrently.
 bool fetching = false;
 
 /** Helper functions **/
@@ -54,7 +56,7 @@ void sig_handler(int signo) {
   }
 }
 
-/* Helpers */
+/** API Wrappers **/
 
 /** 
  * Adds new item to the list.
@@ -76,6 +78,8 @@ void twitch_helix_stream_list_append(twitch_helix_stream_list *dest, twitch_heli
  * Searches for live streams from given user's follows list.
  *
  * @param username Name of the user for which to get follows.
+ * @param client_id API client ID.
+ * @param client_secret API client secret.
  */
 twitch_helix_stream_list *get_live_follows(
   const char *username,
@@ -109,6 +113,7 @@ twitch_helix_stream_list *get_live_follows(
   for (int idx = 0; idx < follows->count; idx++) {
     user_ids[idx] = follows->items[idx]->to_id;
   }
+
   twitch_helix_stream_list *streams = twitch_helix_get_all_streams(
     client_id,
     auth_token,
@@ -171,14 +176,17 @@ void show_streamer_online(twitch_helix_stream *stream) {
   char title[200];
   char message[500];
 
+  char *sanitized_title = string_html_escape(stream->title);
+  
   sprintf(title, "%s is online", stream->user_name);
-  sprintf(message, "<b>%s</b> (%s) is online playing <b>%s</b> with status:\n\n<b>%s</b>",
-    stream->user_name,
+  sprintf(message, "<b>%s</b> is online playing <b>%s</b> with status:\n\n<b>%s</b>",
     stream->user_name,
     stream->game_name != NULL ? stream->game_name : "unknown game",
-    stream->title);
+    sanitized_title);
 
   show_update(title, message, stream->user_name);
+
+  free(sanitized_title);
 }
 
 /**
@@ -217,6 +225,11 @@ twitch_helix_stream_list *new_streams(twitch_helix_stream_list *old, twitch_heli
   return list;
 }
 
+/**
+ * Outputs currently online followed streams to stdout.
+ *
+ * @param username Username for which to get following streams.
+ */
 void print_current_streams(char *username) {
   twitch_helix_stream_list* streams = get_live_follows(username, app_id, client_secret);
 
@@ -264,10 +277,6 @@ gboolean update_list(gpointer user_data) {
 
   // Show notifications for any new streams.
   if (updated != NULL) {
-    if (updated->count > 0) {
-      show_streamer_online(updated->items[0]);
-    }
-
     twitch_helix_stream_list *new_list = new_streams(current, updated);
     for (int index = 0; index < new_list->count; index++) {
       show_streamer_online(new_list->items[index]);
@@ -387,10 +396,11 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-/* Private */
+/** Private **/
 
 void handle_notification_action(NotifyNotification *notification, char *action, gpointer user_data) {
   char command[256] = { 0 };
   sprintf(command, action_template, (char *)user_data);
   system(command);
 }
+

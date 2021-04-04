@@ -30,9 +30,15 @@ From the build dir:
 
 # Usage
 
+To run in daemon mode:
+
 `# stream-notifier <your-twitch-username>`
 
-OR
+To run a daemon without forking to background:
+
+`# stream-notifier <your-twitch-username> -debug`
+
+To show current list of online streamers from your following list:
 
 ```
 # stream-notifier <your-twitch-username> -now
@@ -48,7 +54,7 @@ GOGcom
 
 # Configuration
 
-Only through source code so far. Not sure if it needs something more elaborate at this point.
+Only through source code so far. Not sure if it needs something more elaborate at this point. Most of the useful parameters are at the beginning of `src/daemon.c` file in the `/** Config */` section.
 
 # TODO
 
@@ -60,5 +66,4 @@ Proper daemon ifrastructure:
 To research/add:
 
 - Will be nice to try to download and show streamers icons in notification.
-- Notification actions. Ideally customizable.
 

@@ -42,6 +42,10 @@ char *string_replace(const char *input, const char *substr, const char *repl) {
 }
 
 char *string_html_escape(const char *input) {
+  if (input == NULL) {
+    return NULL;
+  }
+
   string_replacement_t replacements[] = {
     { .input = "&", .output = "&amp;" },
     { .input = "<", .output = "&lt;" },

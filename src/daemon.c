@@ -177,16 +177,18 @@ void show_streamer_online(twitch_helix_stream *stream) {
   char message[500];
 
   char *sanitized_title = string_html_escape(stream->title);
+  char *sanitized_game = string_html_escape(stream->game_name);
   
   sprintf(title, "%s is online", stream->user_name);
   sprintf(message, "<b>%s</b> is online playing <b>%s</b> with status:\n\n<b>%s</b>",
     stream->user_name,
-    stream->game_name != NULL ? stream->game_name : "unknown game",
+    sanitized_game != NULL ? sanitized_game : "unknown game",
     sanitized_title);
 
   show_update(title, message, stream->user_name);
 
   free(sanitized_title);
+  free(sanitized_game);
 }
 
 /**

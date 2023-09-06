@@ -18,8 +18,6 @@
 
 // App ID (registered in Twitch dev portal).
 static const char *app_id = "454q3qk5jh0rzgps78fnxrwc5u1i8t";
-// Client secret for getting client credentials.
-static const char *client_secret = "cdefldwy95veeixq41kwtlrv2audw7";
 // Action template.
 static const char *action_template = "xdg-open 'https://www.twitch.tv/%s'";
 // Action title.
@@ -56,6 +54,13 @@ void sig_handler(int signo) {
   }
 }
 
+/* API call params */
+
+typedef struct {
+  char *username;
+  char *token;
+} call_params_t;
+
 /** API Wrappers **/
 
 /** 
@@ -79,31 +84,25 @@ void twitch_helix_stream_list_append(twitch_helix_stream_list *dest, twitch_heli
  *
  * @param username Name of the user for which to get follows.
  * @param client_id API client ID.
- * @param client_secret API client secret.
+ * @param user_token API access token.
  */
 twitch_helix_stream_list *get_live_follows(
   const char *username,
   const char *client_id,
-  const char *client_secret
+  const char *user_token
 ) {
-  if (auth_token == NULL) {
-    // Get token.
-    twitch_helix_auth_token *token = twitch_helix_get_app_access_token(client_id, client_secret, 0, NULL);
-    if (token == NULL) {
-      fprintf(stderr, "Error: failed to get auth token\n");
-      return NULL;
-    }
-    auth_token = immutable_string_copy(token->token);
-    twitch_helix_auth_token_free(token);
-  }
-
   // Find user by login name to get their user ID.
-  twitch_helix_user *user = twitch_helix_get_user(client_id, auth_token, username);
+  twitch_helix_user *user = twitch_helix_get_user(client_id, user_token, username);
   if (user == NULL) {
     return NULL;
   }
 
-  twitch_helix_follow_list *follows = twitch_helix_get_all_follows(client_id, auth_token, user->id, 0);
+  twitch_helix_channel_follow_list *follows = twitch_helix_get_all_channel_follows(
+    client_id,
+    user_token,
+    user->id,
+    0
+  );
   if (follows == NULL) {
     twitch_helix_user_free(user);
     return NULL;
@@ -111,12 +110,12 @@ twitch_helix_stream_list *get_live_follows(
 
   long long *user_ids = malloc(sizeof(long long) * follows->count);
   for (int idx = 0; idx < follows->count; idx++) {
-    user_ids[idx] = follows->items[idx]->to_id;
+    user_ids[idx] = follows->items[idx]->broadcaster_id;
   }
 
   twitch_helix_stream_list *streams = twitch_helix_get_all_streams(
     client_id,
-    auth_token,
+    user_token,
     0,
     NULL,
     follows->count,
@@ -127,7 +126,7 @@ twitch_helix_stream_list *get_live_follows(
 
   // Cleanup.
   twitch_helix_user_free(user);
-  twitch_helix_follow_list_free(follows);
+  twitch_helix_channel_follow_list_free(follows);
 
   return streams;
 }
@@ -231,9 +230,10 @@ twitch_helix_stream_list *new_streams(twitch_helix_stream_list *old, twitch_heli
  * Outputs currently online followed streams to stdout.
  *
  * @param username Username for which to get following streams.
+ * @param token User access token.
  */
-void print_current_streams(char *username) {
-  twitch_helix_stream_list* streams = get_live_follows(username, app_id, client_secret);
+void print_current_streams(char *username, char *user_token) {
+  twitch_helix_stream_list* streams = get_live_follows(username, app_id, user_token);
 
   if (streams == NULL) {
     fprintf(stderr, "Failed to get a list of active follows\n");
@@ -256,7 +256,7 @@ void print_current_streams(char *username) {
 /** Main **/
 
 void print_usage() {
-  printf("Usage:\n  stream-notifier <username> [options]\n\n");
+  printf("Usage:\n  stream-notifier <username> <access token> [options]\n\n");
   printf("Options:\n");
   printf("  %-20s\t%s\n", "-now", "Instead of starting the daemon, just prints out currently online streams and exits.");
   printf("  %-20s\t%s\n", "-debug", "Instead of forking to background, just run in the main loop.");
@@ -272,10 +272,12 @@ gboolean update_list(gpointer user_data) {
     fetching = true;
   }
 
-  char *username = (char *)user_data;
+  call_params_t *params = (call_params_t *)user_data;
+  char *username = params->username;
+  char *token = params->token;
 
   // Update the list.
-  updated = get_live_follows(username, app_id, client_secret);
+  updated = get_live_follows(username, app_id, token);
 
   // Show notifications for any new streams.
   if (updated != NULL) {
@@ -309,22 +311,20 @@ gboolean update_list(gpointer user_data) {
 int main(int argc, char **argv) {
   bool should_fork = true;
 
-  if (argc < 2) {
+  if (argc < 3) {
     print_usage();
     exit(EXIT_FAILURE);
   }
 
-  if (argc > 2) {
-    for (int idx = 2; idx < argc; idx++) {
-      if (strcmp(argv[idx], "-now") == 0) {
-        print_current_streams(argv[1]);
-        return 0;
-      } else if (strcmp(argv[idx], "-debug") == 0) {
-        should_fork = false;
-      } else {
-        print_usage();
-        exit(EXIT_FAILURE);
-      }
+  if (argc > 3) {
+    if (strcmp(argv[argc-1], "-now") == 0) {
+      print_current_streams(argv[1], argv[2]);
+      return 0;
+    } else if (strcmp(argv[argc-1], "-debug") == 0) {
+      should_fork = false;
+    } else {
+      print_usage();
+      exit(EXIT_FAILURE);
     }
   }
 
@@ -381,11 +381,15 @@ int main(int argc, char **argv) {
   // Initialize daemon.
   notify_init("stream-notifier");
   twitch_helix_stream_list *streams = NULL;
-  streams = get_live_follows(argv[1], app_id, client_secret);
+  streams = get_live_follows(argv[1], app_id, argv[2]);
 
   // Start the loop.
   loop = g_main_loop_new(NULL, false);
-  g_timeout_add(polling_interval_ms, update_list, argv[1]);
+  call_params_t params = {
+    .username = argv[1],
+    .token = argv[2]
+  };
+  g_timeout_add(polling_interval_ms, update_list, &params);
   g_main_loop_run(loop);
 
   // Cleanup.

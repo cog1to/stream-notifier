@@ -28,20 +28,34 @@ From the build dir:
 
 `make install`
 
-# Usage
+# Setting up
+
+Since Twitch has deprecated the old app API, you now need to obtain a user
+access token for the daemon to work. You can do that by opening an URL in a
+browser:
+
+```
+https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=454q3qk5jh0rzgps78fnxrwc5u1i8t&redirect_uri=htp://localhost/twitch_redirect&scope=user%3Aread%3Afollows&state=12345
+```
+
+After granting the permission to the app, the browser will redirect you to
+`http://localhost/twitch_redirect` page (and fail), and you should be able to
+grab the `access_token` param from the destination URL.
+
+# Running
 
 To run in daemon mode:
 
-`# stream-notifier <your-twitch-username>`
+`# stream-notifier <your-twitch-username> <access-token>`
 
 To run a daemon without forking to background:
 
-`# stream-notifier <your-twitch-username> -debug`
+`# stream-notifier <your-twitch-username> <access-token> -debug`
 
 To show current list of online streamers from your following list:
 
 ```
-# stream-notifier <your-twitch-username> -now
+# stream-notifier <your-twitch-username> <access-token> -now
 ESL_SC2
    Game: StarCraft II
    Status: RERUN: INnoVation [T] vs. RagnaroK [Z] - Group C Round 4 - IEM Katowice 2019

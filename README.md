@@ -35,7 +35,7 @@ access token for the daemon to work. You can do that by opening an URL in a
 browser:
 
 ```
-https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=454q3qk5jh0rzgps78fnxrwc5u1i8t&redirect_uri=htp://localhost/twitch_redirect&scope=user%3Aread%3Afollows&state=12345
+https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=454q3qk5jh0rzgps78fnxrwc5u1i8t&redirect_uri=http://localhost/twitch_redirect&scope=user%3Aread%3Afollows&state=12345
 ```
 
 After granting the permission to the app, the browser will redirect you to

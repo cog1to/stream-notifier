@@ -98,18 +98,29 @@ twitch_helix_stream_list *get_live_follows(
 	const char *client_id,
 	const char *user_token
 ) {
+	twitch_error error = { 0, 0, 0 };
+
 	// Find user by login name to get their user ID.
-	twitch_helix_user *user = twitch_helix_get_user(client_id, user_token, username);
+	twitch_helix_user *user = twitch_helix_get_user(
+		client_id,
+		user_token,
+		&error,
+		username
+	);
+
 	if (user == NULL) {
 		return NULL;
 	}
 
-	twitch_helix_channel_follow_list *follows = twitch_helix_get_all_channel_follows(
-		client_id,
-		user_token,
-		user->id,
-		0
-	);
+	twitch_helix_channel_follow_list *follows =
+		twitch_helix_get_all_channel_follows(
+			client_id,
+			user_token,
+			&error,
+			user->id,
+			0
+		);
+
 	if (follows == NULL) {
 		twitch_helix_user_free(user);
 		return NULL;
@@ -123,6 +134,7 @@ twitch_helix_stream_list *get_live_follows(
 	twitch_helix_stream_list *streams = twitch_helix_get_all_streams(
 		client_id,
 		user_token,
+		&error,
 		NULL,
 		NULL,
 		follows->count,
